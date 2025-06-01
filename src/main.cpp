@@ -42,11 +42,51 @@ void loadConfig() {
   baudrate = preferences.getInt("baudrate", 9600);
 }
 
+void setupWebRoutes() {
+  server.on("/", []() {
+    String html = "<html><head><title>Config Portal</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;text-align:center;}input,select{width:100%;padding:8px;margin:6px 0;}</style></head><body>";
+    html += "<h2>Configure WiFi and Settings</h2>";
+    html += "<form method='POST' action='/save'>";
+    html += "SSID: <select name='ssid'>";
+    int n = WiFi.scanNetworks();
+    for (int i = 0; i < n; ++i) {
+      String ssidScan = WiFi.SSID(i);
+      int rssi = WiFi.RSSI(i);
+      html += "<option value='" + ssidScan + "'>" + ssidScan + " (" + String(rssi) + "dBm)</option>";
+    }
+    html += "</select><br>";
+    html += "Password: <input type='password' name='password'><br>";
+    html += "Hostname: <input type='text' name='hostname' value='" + hostname + "'><br>";
+    html += "NTP Server: <input type='text' name='ntpserver' value='" + ntpServer + "'><br>";
+    html += "Baudrate: <input type='number' name='baudrate' value='" + String(baudrate) + "'><br>";
+    html += "<input type='submit' value='Save'>";
+    html += "</form></body></html>";
+    server.send(200, "text/html", html);
+  });
+
+  server.on("/save", []() {
+    if (server.hasArg("ssid")) ssid = server.arg("ssid");
+    if (server.hasArg("password")) password = server.arg("password");
+    if (server.hasArg("hostname")) hostname = server.arg("hostname");
+    if (server.hasArg("ntpserver")) ntpServer = server.arg("ntpserver");
+    if (server.hasArg("baudrate")) baudrate = server.arg("baudrate").toInt();
+
+    saveConfig();
+
+    server.send(200, "text/html", "<html><body>Settings saved. Rebooting...</body></html>");
+    delay(1000);
+    ESP.restart();
+  });
+
+  server.begin();
+}
+
 void startAPMode() {
   configMode = true;
   WiFi.softAP("ESP32GPSConfig");
   IPAddress ip = WiFi.softAPIP();
   Serial.printf("Started AP mode: IP %s\n", ip.toString().c_str());
+  setupWebRoutes();
 
   server.on("/", []() {
     String html = "<html><head><title>Config Portal</title>"
@@ -106,11 +146,14 @@ void startWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("Connected! IP: %s\n", WiFi.localIP().toString().c_str());
     configTime(0, 0, ntpServer.c_str());
+    setupWebRoutes();
   } else {
     Serial.println("Failed to connect to WiFi.");
     startAPMode();
   }
 }
+
+
 
 String calculateChecksum(const String &sentence) {
   uint8_t checksum = 0;
@@ -193,7 +236,7 @@ void drawDisplay() {
     spr.print(timebuf);
   } else {
     spr.setTextColor(TFT_CYAN);
-    spr.print("Waiting ...");
+    spr.print("Waiting time...");
   }
 
   spr.pushSprite(0, 0);
