@@ -3,13 +3,13 @@
 #include <Preferences.h>
 #include <ESPmDNS.h>
 #include <TFT_eSPI.h>
-#include <sys/time.h>  // for gettimeofday()
+#include <sys/time.h>
 
 TFT_eSPI tft = TFT_eSPI();
-TFT_eSprite spr = TFT_eSprite(&tft);  // Create sprite for double buffering
+TFT_eSprite sprite = TFT_eSprite(&tft);  // Off-screen buffer
 
-#define GPS_TX_PIN 26       // Serial GPS output pin (changed per your request)
-#define RESET_BUTTON_PIN 0  // Boot button on TTGO T-Display (GPIO0)
+#define GPS_TX_PIN 26
+#define RESET_BUTTON_PIN 0
 
 Preferences preferences;
 
@@ -20,11 +20,22 @@ String ntpServer = "pool.ntp.org";
 int baudrate = 9600;
 
 bool configMode = false;
+bool timeSet = false;
+bool buttonPressed = false;
 
 WebServer server(80);
 
 unsigned long lastDisplayUpdate = 0;
 const unsigned long displayInterval = 1000;
+
+unsigned long buttonPressStart = 0;
+
+void updateTimeStatus() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  struct tm *tm_struct = gmtime(&tv.tv_sec);
+  timeSet = (tm_struct->tm_year + 1900) >= 2020;
+}
 
 void saveConfig() {
   preferences.putString("ssid", ssid);
@@ -44,9 +55,16 @@ void loadConfig() {
 
 void setupWebRoutes() {
   server.on("/", []() {
-    String html = "<html><head><title>Config Portal</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;text-align:center;}input,select{width:100%;padding:8px;margin:6px 0;}</style></head><body>";
-    html += "<h2>Configure WiFi and Settings</h2>";
-    html += "<form method='POST' action='/save'>";
+    String html = "<html><head><title>NixieGPS-Emulator</title>"
+                  "<style>"
+                  "body { font-family: Arial, sans-serif; background-color: #222; color: #eee; font-size: 24px; }"
+                  "form { margin: auto; width: 640px; padding: 40px; background: #333; border-radius: 20px; }"
+                  "input, select { width: 100%; margin: 16px 0; padding: 16px; border-radius: 8px; border: none; font-size: 24px; }"
+                  "input[type=submit] { background-color: #4CAF50; color: white; font-weight: bold; cursor: pointer; padding: 16px; }"
+                  "h2 { text-align: center; font-size: 28px; }"
+                  "</style>"
+                  "</head><body><form method='POST' action='/save'>"
+                  "<h2>NixieGPS-Emulator Configure WiFi and Settings</h2>";
     html += "SSID: <select name='ssid'>";
     int n = WiFi.scanNetworks();
     for (int i = 0; i < n; ++i) {
@@ -73,60 +91,20 @@ void setupWebRoutes() {
 
     saveConfig();
 
-    server.send(200, "text/html", "<html><body>Settings saved. Rebooting...</body></html>");
-    delay(1000);
-    ESP.restart();
-  });
-
-  server.begin();
-}
-
-void startAPMode() {
-  configMode = true;
-  WiFi.softAP("ESP32GPSConfig");
-  IPAddress ip = WiFi.softAPIP();
-  Serial.printf("Started AP mode: IP %s\n", ip.toString().c_str());
-  setupWebRoutes();
-
-  server.on("/", []() {
-    String html = "<html><head><title>Config Portal</title>"
-                  "<style>body{font-family:Arial,sans-serif;text-align:center;margin-top:30px;}"
-                  "form{display:inline-block;text-align:left;}</style></head><body>";
-    html += "<h2>Configure WiFi and Settings</h2>";
-    html += "<form method='POST' action='/save'>";
-    html += "SSID: <select name='ssid'>";
-    int n = WiFi.scanNetworks();
-    for (int i = 0; i < n; ++i) {
-      String ssidScan = WiFi.SSID(i);
-      int rssi = WiFi.RSSI(i);
-      html += "<option value='" + ssidScan + "'>" + ssidScan + " (" + String(rssi) + "dBm)</option>";
-    }
-    html += "</select><br><br>";
-    html += "Password: <input type='password' name='password'><br><br>";
-    html += "Hostname: <input type='text' name='hostname' value='" + hostname + "'><br><br>";
-    html += "NTP Server: <input type='text' name='ntpserver' value='" + ntpServer + "'><br><br>";
-    html += "Baudrate: <input type='number' name='baudrate' value='" + String(baudrate) + "'><br><br>";
-    html += "<input type='submit' value='Save'>";
-    html += "</form></body></html>";
-    server.send(200, "text/html", html);
-  });
-
-  server.on("/save", []() {
-    if (server.hasArg("ssid")) ssid = server.arg("ssid");
-    if (server.hasArg("password")) password = server.arg("password");
-    if (server.hasArg("hostname")) hostname = server.arg("hostname");
-    if (server.hasArg("ntpserver")) ntpServer = server.arg("ntpserver");
-    if (server.hasArg("baudrate")) baudrate = server.arg("baudrate").toInt();
-
-    saveConfig();
-
-    String response = "<html><body><h3>Settings saved. Rebooting...</h3></body></html>";
+    String response = "<html><body><p>Settings saved. Rebooting...</p></body></html>";
     server.send(200, "text/html", response);
 
     delay(1000);
     ESP.restart();
   });
+}
 
+void startAPMode() {
+  configMode = true;
+  WiFi.softAP("NixieGPS");
+  IPAddress ip = WiFi.softAPIP();
+  Serial.printf("Started AP mode: IP %s\n", ip.toString().c_str());
+  setupWebRoutes();
   server.begin();
 }
 
@@ -147,13 +125,12 @@ void startWiFi() {
     Serial.printf("Connected! IP: %s\n", WiFi.localIP().toString().c_str());
     configTime(0, 0, ntpServer.c_str());
     setupWebRoutes();
+    server.begin();
   } else {
     Serial.println("Failed to connect to WiFi.");
     startAPMode();
   }
 }
-
-
 
 String calculateChecksum(const String &sentence) {
   uint8_t checksum = 0;
@@ -168,16 +145,13 @@ String calculateChecksum(const String &sentence) {
 
 void outputGPS() {
   struct timeval tv;
-  if (gettimeofday(&tv, NULL) != 0) {
-    return; // no valid time yet
-  }
+  if (gettimeofday(&tv, NULL) != 0) return;
 
   time_t now = tv.tv_sec;
   struct tm *tm_struct = gmtime(&now);
 
-  // Format GPRMC time and date: hhmmss.sss, ddmmyy
   char buffer[80];
-  sprintf(buffer, "GPRMC,%02d%02d%02d.00,A,0000.00,N,00000.00,E,0.0,0.0,%02d%02d%02d,,",
+  sprintf(buffer, "GPRMC,%02d%02d%02d.000,A,0000.0000,N,00000.0000,E,0.0,0.0,%02d%02d%02d,,",
           tm_struct->tm_hour, tm_struct->tm_min, tm_struct->tm_sec,
           tm_struct->tm_mday, tm_struct->tm_mon + 1, (tm_struct->tm_year + 1900) % 100);
 
@@ -193,55 +167,67 @@ void outputGPS() {
 }
 
 void drawDisplay() {
-  spr.fillSprite(TFT_BLACK);
+  sprite.fillSprite(TFT_BLACK);
+  if (configMode) {
+    // AP Mode display
+    sprite.setTextSize(3);
+    sprite.setTextColor(TFT_ORANGE);
+    sprite.setCursor(40, 20);
+    sprite.println("AP Mode");
 
+    sprite.setTextSize(2);
+    sprite.setCursor(5, 70);
+    sprite.setTextColor(TFT_WHITE);
+    sprite.print("IP: ");
+    sprite.setTextColor(TFT_CYAN);
+    sprite.println(WiFi.softAPIP().toString());
+  } else {  
   // Labels in white
-  spr.setTextColor(TFT_WHITE);
-  spr.setTextSize(2);
-  spr.setCursor(5, 0);
-  spr.print("Host: ");
-  spr.setTextColor(TFT_CYAN);
-  spr.print(hostname.c_str());
+  sprite.setTextColor(TFT_WHITE);
+  sprite.setTextSize(2);
+  sprite.setCursor(5, 0);
+  sprite.print("Host: ");
+  sprite.setTextColor(TFT_CYAN);
+  sprite.print(hostname.c_str());
 
-  spr.setCursor(5, 30);
-  spr.setTextColor(TFT_WHITE);
-  spr.print("IP: ");
-  spr.setTextColor(TFT_CYAN);
-  spr.print(WiFi.localIP().toString());
+  sprite.setCursor(5, 30);
+  sprite.setTextColor(TFT_WHITE);
+  sprite.print("IP: ");
+  sprite.setTextColor(TFT_CYAN);
+  sprite.print(WiFi.localIP().toString());
 
-  spr.setCursor(5, 60);
-  spr.setTextColor(TFT_WHITE);
-  spr.print("NTP: ");
-  bool timeSet = false;
+  sprite.setCursor(5, 60);
+  sprite.setTextColor(TFT_WHITE);
+  sprite.print("NTP: ");
+  
+  updateTimeStatus();
   struct timeval tv;
   gettimeofday(&tv, NULL);
   struct tm *tm_struct = gmtime(&tv.tv_sec);
-  timeSet = (tm_struct->tm_year + 1900) >= 2020;
 
   if (timeSet) {
-    spr.setTextColor(TFT_GREEN);
-    spr.print("OK");
+    sprite.setTextColor(TFT_GREEN);
+    sprite.print("OK");
   } else {
-    spr.setTextColor(TFT_WHITE);
-    spr.print("Syncing...");
+    sprite.setTextColor(TFT_WHITE);
+    sprite.print("Syncing...");
   }
 
-  // Time larger and lower
-  spr.setTextSize(3);
-  spr.setCursor(5, 90);
+  sprite.setCursor(5, 90);
   if (timeSet) {
+    sprite.setTextSize(3);
     char timebuf[20];
     sprintf(timebuf, "%02d:%02d:%02d UTC", tm_struct->tm_hour, tm_struct->tm_min, tm_struct->tm_sec);
-    spr.setTextColor(TFT_CYAN);
-    spr.print(timebuf);
+    sprite.setTextColor(TFT_CYAN);
+    sprite.print(timebuf);
   } else {
-    spr.setTextColor(TFT_CYAN);
-    spr.print("Waiting time...");
+    sprite.setTextSize(2);
+    sprite.setTextColor(TFT_CYAN);
+    sprite.print("Waiting for NTP...");
   }
-
-  spr.pushSprite(0, 0);
 }
-
+  sprite.pushSprite(0, 0);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -251,40 +237,55 @@ void setup() {
   Serial2.begin(baudrate, SERIAL_8N1, -1, GPS_TX_PIN);
 
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
-  delay(50);
-  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
-    Serial.println("Reset button pressed: clearing config...");
-    preferences.clear();
-    delay(500);
-    ESP.restart();
-  }
+//  delay(50);
+//  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
+//    Serial.println("Reset button pressed: clearing config...");
+//    preferences.clear();
+//    delay(500);
+//    ESP.restart();
+//  }
 
   tft.init();
   tft.setRotation(1);
-
-  spr.createSprite(tft.width(), tft.height());  // Create sprite buffer matching display
-
-  tft.fillScreen(TFT_BLACK);
+  sprite.createSprite(tft.width(), tft.height());
+  sprite.setRotation(1);
 
   if (ssid == "") {
+    configMode = true;
     startAPMode();
   } else {
+    configMode = false;
     startWiFi();
-  }
-
-  server.begin();  // Always start server (AP or STA mode)
-
+    }
   if (!configMode) {
     if (!MDNS.begin(hostname.c_str())) {
       Serial.println("Error starting mDNS");
     } else {
       Serial.printf("mDNS started: http://%s.local\n", hostname.c_str());
+      
     }
+  }
+}
+
+void checkResetButton() {
+  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
+    if (!buttonPressed) {
+      buttonPressed = true;
+      buttonPressStart = millis();
+    } else if (millis() - buttonPressStart >= 2000) {
+      Serial.println("Long press detected: clearing config...");
+      preferences.clear();
+      delay(500);
+      ESP.restart();
+    }
+  } else {
+    buttonPressed = false;
   }
 }
 
 void loop() {
   server.handleClient();
+  checkResetButton();
 
   if (!configMode) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -292,11 +293,21 @@ void loop() {
       if (now - lastDisplayUpdate > displayInterval) {
         lastDisplayUpdate = now;
         drawDisplay();
-        outputGPS();
+        if (timeSet) {
+          outputGPS();
+        }
+        updateTimeStatus();
       }
     } else {
       Serial.println("WiFi lost, starting AP mode");
       startAPMode();
+      configMode = true;
+    }
+  } else {
+    unsigned long now = millis();
+    if (now - lastDisplayUpdate > displayInterval) {
+      lastDisplayUpdate = now;
+      drawDisplay();
     }
   }
 }
