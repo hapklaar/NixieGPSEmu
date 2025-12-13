@@ -40,6 +40,8 @@ TFT_eSprite sprite = TFT_eSprite(&tft); // Off-screen buffer for flicker-free dr
 // Configuration & State Variables
 Preferences preferences;
 
+int screenRotation = 1;  // 1 = normal, 3 = 180 degrees
+
 String ssid = "";
 String password = "";
 String hostname = "NixieGPSEmu";
@@ -85,6 +87,7 @@ void saveConfig() {
   preferences.putString("hostname", hostname);
   preferences.putString("ntpserver", ntpServer);
   preferences.putInt("baudrate", baudrate);
+  preferences.putInt("rotation", screenRotation);
 }
 
 void loadConfig() {
@@ -93,6 +96,7 @@ void loadConfig() {
   hostname = preferences.getString("hostname", "NixieGPSEmu");
   ntpServer = preferences.getString("ntpserver", "pool.ntp.org");
   baudrate = preferences.getInt("baudrate", 9600);
+  screenRotation = preferences.getInt("rotation", 1);
 }
 
 // =================================================================
@@ -128,6 +132,15 @@ void setupWebRoutes() {
     html += "Hostname: <input type='text' name='hostname' value='" + hostname + "'><br>";
     html += "NTP Server: <input type='text' name='ntpserver' value='" + ntpServer + "'><br>";
     html += "Baudrate: <input type='number' name='baudrate' value='" + String(baudrate) + "'><br>";
+    html += "Screen Rotation: <select name='rotation'>";
+    html += "<option value='1'";
+    if (screenRotation == 1) html += " selected";
+    html += ">Normal</option>";
+
+    html += "<option value='3'";
+    if (screenRotation == 3) html += " selected";
+    html += ">180 Degrees</option>";
+    html += "</select><br>";
     html += "<input type='submit' value='Save'>";
     html += "</form></body></html>";
     server.send(200, "text/html", html);
@@ -143,7 +156,9 @@ void setupWebRoutes() {
     if (server.hasArg("hostname")) hostname = server.arg("hostname");
     if (server.hasArg("ntpserver")) ntpServer = server.arg("ntpserver");
     if (server.hasArg("baudrate")) baudrate = server.arg("baudrate").toInt();
-
+    if (server.hasArg("rotation")) {
+      screenRotation = server.arg("rotation").toInt();
+      }
     saveConfig();
 
     // Improvement: More informative save page
@@ -302,10 +317,12 @@ void setup() {
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
   delay(50); // Small delay to stabilize pin reading
 
-  tft.init();
-  tft.setRotation(1);
-  sprite.createSprite(tft.width(), tft.height());
-  sprite.setRotation(1);
+tft.init();
+tft.setRotation(screenRotation);
+
+sprite.createSprite(tft.width(), tft.height());
+sprite.setRotation(screenRotation);
+
 
   // Improvement: Force AP mode if no SSID saved OR reset button is held on boot
   if (ssid == "" || digitalRead(RESET_BUTTON_PIN) == LOW) {
